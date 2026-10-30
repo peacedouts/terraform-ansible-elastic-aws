@@ -1,0 +1,15 @@
+---
+# Shared by every Elastic role:
+#   include_role: { name: common, tasks_from: install_elastic_package }
+# with `common_elastic_package` set to the package name.
+
+- name: Install {{ common_elastic_package }}
+  ansible.builtin.apt:
+    name: "{{ common_elastic_package }}{{ ('=' ~ elastic_version) if elastic_version | length > 0 else '' }}"
+    state: present
+    allow_downgrade: false
+
+- name: Hold the package at the pinned version ({{ common_elastic_package }})
+  ansible.builtin.dpkg_selections:
+    name: "{{ common_elastic_package }}"
+    selection: "{{ 'hold' if elastic_version | length > 0 else 'install' }}"

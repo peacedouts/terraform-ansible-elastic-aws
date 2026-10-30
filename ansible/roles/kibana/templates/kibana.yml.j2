@@ -1,0 +1,34 @@
+# {{ ansible_managed }}
+# Secrets (the kibana_system password and encryption keys) are in the Kibana keystore.
+
+server.host: "0.0.0.0"
+server.port: {{ kibana_port }}
+server.name: {{ inventory_hostname }}
+server.publicBaseUrl: "{{ kibana_public_base_url }}"
+
+server.ssl.enabled: true
+server.ssl.certificate: {{ kibana_conf_dir }}/certs/node.crt
+server.ssl.key: {{ kibana_conf_dir }}/certs/node.key
+
+elasticsearch.hosts:
+{% for url in es_http_urls %}
+  - "{{ url }}"
+{% endfor %}
+elasticsearch.username: kibana_system
+elasticsearch.ssl.certificateAuthorities: [{{ kibana_conf_dir }}/certs/ca.crt]
+elasticsearch.ssl.verificationMode: full
+
+# Metricbeat collects Kibana's monitoring data instead.
+monitoring.kibana.collection.enabled: false
+
+logging:
+  appenders:
+    file:
+      type: file
+      fileName: /var/log/kibana/kibana.log
+      layout:
+        type: json
+  root:
+    appenders: [default, file]
+
+pid.file: /run/kibana/kibana.pid

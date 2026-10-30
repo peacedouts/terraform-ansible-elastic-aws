@@ -1,0 +1,125 @@
+---
+- name: Raise vm.max_map_count for Lucene
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: "262144"
+    sysctl_set: true
+    state: present
+
+- name: Disable swap now
+  ansible.builtin.command: swapoff -a
+  when: ansible_swaptotal_mb | int > 0
+  changed_when: true
+
+- name: Keep swap disabled across reboots
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s.*)$'
+    replace: '# \1'
+
+- name: Install Elasticsearch
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: install_elastic_package
+  vars:
+    common_elastic_package: elasticsearch
+
+- name: Create the certs directory
+  ansible.builtin.file:
+    path: "{{ elasticsearch_conf_dir }}/certs"
+    state: directory
+    owner: root
+    group: elasticsearch
+    mode: "0750"
+
+- name: Install node TLS material
+  ansible.builtin.copy:
+    src: "{{ elk_certs_local_dir }}/{{ item.src }}"
+    dest: "{{ elasticsearch_conf_dir }}/certs/{{ item.dest }}"
+    owner: root
+    group: elasticsearch
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: "ca/ca.crt", dest: "ca.crt", mode: "0644" }
+    - { src: "{{ inventory_hostname }}/{{ inventory_hostname }}.crt", dest: "node.crt", mode: "0644" }
+    - { src: "{{ inventory_hostname }}/{{ inventory_hostname }}.key", dest: "node.key", mode: "0640" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart elasticsearch
+
+- name: Set the JVM heap size
+  ansible.builtin.template:
+    src: heap.options.j2
+    dest: "{{ elasticsearch_conf_dir }}/jvm.options.d/heap.options"
+    owner: root
+    group: elasticsearch
+    mode: "0644"
+  notify: Restart elasticsearch
+
+- name: Write elasticsearch.yml
+  ansible.builtin.template:
+    src: elasticsearch.yml.j2
+    dest: "{{ elasticsearch_conf_dir }}/elasticsearch.yml"
+    owner: root
+    group: elasticsearch
+    mode: "0660"
+  notify: Restart elasticsearch
+
+- name: Read the keystore entries
+  ansible.builtin.command: /usr/share/elasticsearch/bin/elasticsearch-keystore list
+  register: elasticsearch_keystore
+  changed_when: false
+
+# The package's security auto-configuration adds passwords for PKCS#12
+# keystores. This role uses PEM files instead, so those entries must go or
+# Elasticsearch refuses to start.
+- name: Remove auto-configured keystore passwords
+  ansible.builtin.command: >-
+    /usr/share/elasticsearch/bin/elasticsearch-keystore remove {{ item }}
+  loop:
+    - xpack.security.http.ssl.keystore.secure_password
+    - xpack.security.transport.ssl.keystore.secure_password
+    - xpack.security.transport.ssl.truststore.secure_password
+  when: item in elasticsearch_keystore.stdout_lines
+  changed_when: true
+  notify: Restart elasticsearch
+
+# Sets the elastic superuser's password the first time the cluster starts.
+- name: Set the bootstrap password
+  ansible.builtin.command:
+    cmd: /usr/share/elasticsearch/bin/elasticsearch-keystore add --stdin --force bootstrap.password
+    stdin: "{{ elastic_password }}"
+  when: "'bootstrap.password' not in elasticsearch_keystore.stdout_lines"
+  changed_when: true
+  no_log: true
+  notify: Restart elasticsearch
+
+- name: Enable Elasticsearch
+  ansible.builtin.systemd_service:
+    name: elasticsearch
+    enabled: true
+    daemon_reload: true
+
+# Restart for any config change first, so a fresh install starts only once.
+- name: Apply pending restarts
+  ansible.builtin.meta: flush_handlers
+
+# Every node starts in parallel; a master can't be elected until a quorum is up.
+- name: Start Elasticsearch
+  ansible.builtin.systemd_service:
+    name: elasticsearch
+    state: started
+
+- name: Wait for the cluster to report healthy
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ es_http_port }}/_cluster/health?wait_for_status=yellow&timeout=50s"
+    user: elastic
+    password: "{{ elastic_password }}"
+    force_basic_auth: true
+    ca_path: "{{ elasticsearch_conf_dir }}/certs/ca.crt"
+    status_code: 200
+  register: elasticsearch_health
+  until: elasticsearch_health.status == 200
+  retries: 20
+  delay: 10
+  no_log: true

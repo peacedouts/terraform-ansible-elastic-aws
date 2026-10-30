@@ -1,0 +1,8 @@
+---
+profile: production
+
+exclude_paths:
+  - collections/
+  - inventory/group_vars/all/vault.yml
+  - inventory/elk.aws_ec2.yml
+  - .certs/

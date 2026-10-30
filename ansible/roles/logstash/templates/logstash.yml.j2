@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+
+node.name: {{ inventory_hostname }}
+path.data: /var/lib/logstash
+path.logs: /var/log/logstash
+path.config: {{ logstash_conf_dir }}/conf.d/*.conf
+
+pipeline.workers: {{ logstash_pipeline_workers }}
+pipeline.ecs_compatibility: v8
+
+# The monitoring API stays on loopback; Metricbeat reads it locally.
+api.http.host: 127.0.0.1
+api.http.port: {{ logstash_api_port }}
+
+# Metricbeat collects Logstash's monitoring data instead.
+xpack.monitoring.enabled: false

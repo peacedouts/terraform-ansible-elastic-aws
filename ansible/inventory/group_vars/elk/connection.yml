@@ -1,0 +1,7 @@
+---
+# Every stack host is reached through SSM Session Manager: no SSH keys, no port 22.
+# The region and transfer bucket come from group_vars/all/terraform.yml.
+# These live under the `elk` group, not `all`, so plays on localhost stay local.
+ansible_connection: amazon.aws.aws_ssm
+ansible_aws_ssm_s3_addressing_style: virtual
+ansible_python_interpreter: /usr/bin/python3

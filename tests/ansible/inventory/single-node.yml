@@ -1,0 +1,15 @@
+---
+# Cheapest demo layout: one Elasticsearch node.
+all:
+  children:
+    elk:
+      children:
+        elasticsearch:
+          hosts:
+            elk-test-es-01: { private_ip: 10.40.128.11, private_dns: ip-10-40-128-11.ec2.internal, placement: { availability_zone: us-east-1a } }
+        kibana:
+          hosts:
+            elk-test-kibana-01: { private_ip: 10.40.128.21, private_dns: ip-10-40-128-21.ec2.internal, placement: { availability_zone: us-east-1a } }
+        logstash:
+          hosts:
+            elk-test-logstash-01: { private_ip: 10.40.128.31, private_dns: ip-10-40-128-31.ec2.internal, placement: { availability_zone: us-east-1a } }

@@ -1,0 +1,282 @@
+---
+# Offline tests: no AWS, no hosts. Generates real certificates with the
+# elk_certs role, renders every template for every host in the given
+# inventory, and asserts on the results.
+#
+#   ansible-playbook -i inventory/three-node.yml render_test.yml
+#   ansible-playbook -i inventory/single-node.yml render_test.yml
+
+- name: Generate and check TLS material
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    test_out: "{{ playbook_dir }}/.out/{{ ansible_inventory_sources[0] | basename | splitext | first }}"
+    elk_certs_local_dir: "{{ test_out }}/certs"
+  tasks:
+    - name: Start from a clean output directory
+      ansible.builtin.file:
+        path: "{{ test_out }}"
+        state: absent
+
+    - name: Run the elk_certs role
+      ansible.builtin.include_role:
+        name: elk_certs
+
+    - name: Fingerprint the generated files
+      ansible.builtin.find:
+        paths: "{{ elk_certs_local_dir }}"
+        recurse: true
+        get_checksum: true
+      register: test_certs_first
+
+    - name: Run the elk_certs role again
+      ansible.builtin.include_role:
+        name: elk_certs
+
+    - name: Fingerprint the files after the second run
+      ansible.builtin.find:
+        paths: "{{ elk_certs_local_dir }}"
+        recurse: true
+        get_checksum: true
+      register: test_certs_second
+
+    - name: A rerun reuses existing keys and certificates
+      ansible.builtin.assert:
+        that: >-
+          test_certs_first.files | map(attribute='checksum') | sort
+          == test_certs_second.files | map(attribute='checksum') | sort
+        fail_msg: The elk_certs role regenerated keys or certificates on a rerun
+
+    - name: Every host certificate chains to the CA
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - verify
+          - -CAfile
+          - "{{ elk_certs_local_dir }}/ca/ca.crt"
+          - "{{ elk_certs_local_dir }}/{{ item }}/{{ item }}.crt"
+      loop: "{{ groups['elk'] }}"
+      changed_when: false
+
+    - name: Read each host certificate
+      community.crypto.x509_certificate_info:
+        path: "{{ elk_certs_local_dir }}/{{ item }}/{{ item }}.crt"
+      loop: "{{ groups['elk'] }}"
+      register: test_cert_info
+
+    - name: Certificates carry the right names and usages
+      ansible.builtin.assert:
+        that:
+          - ("IP:" ~ hostvars[item.item].private_ip) in item.subject_alt_name
+          - ("DNS:" ~ item.item) in item.subject_alt_name
+          - "'DNS:localhost' in item.subject_alt_name"
+          - "'IP:127.0.0.1' in item.subject_alt_name"
+          - "'TLS Web Server Authentication' in item.extended_key_usage"
+          - "'TLS Web Client Authentication' in item.extended_key_usage"
+          - not item.basic_constraints | default([]) | select('equalto', 'CA:TRUE') | list
+        quiet: true
+      loop: "{{ test_cert_info.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the CA certificate
+      community.crypto.x509_certificate_info:
+        path: "{{ elk_certs_local_dir }}/ca/ca.crt"
+      register: test_ca_info
+
+    - name: The CA is a CA
+      ansible.builtin.assert:
+        that:
+          - "'CA:TRUE' in test_ca_info.basic_constraints"
+          - test_ca_info.basic_constraints_critical
+
+    - name: Find the private keys
+      ansible.builtin.find:
+        paths: "{{ elk_certs_local_dir }}"
+        patterns: "*.key"
+        recurse: true
+      register: test_keys
+
+    - name: Private keys are readable by the owner only
+      ansible.builtin.assert:
+        that: item.mode == '0600'
+        fail_msg: "{{ item.path }} has mode {{ item.mode }}"
+        quiet: true
+      loop: "{{ test_keys.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Host keys are PKCS#8 (required by the Logstash Beats input)
+      ansible.builtin.command: head -n1 {{ elk_certs_local_dir }}/{{ item }}/{{ item }}.key
+      loop: "{{ groups['elk'] }}"
+      register: test_key_headers
+      changed_when: false
+      # Built in two parts so secret scanners don't mistake this file for a key.
+      failed_when: test_key_headers.stdout != '-----BEGIN ' ~ 'PRIVATE KEY-----'
+
+- name: Render every template
+  hosts: elk
+  connection: local
+  gather_facts: false
+  vars:
+    test_out: "{{ playbook_dir }}/.out/{{ ansible_inventory_sources[0] | basename | splitext | first }}"
+    test_host_out: "{{ test_out }}/rendered/{{ inventory_hostname }}"
+    ansible_managed: Rendered by render_test.yml
+    # Role defaults the templates expect.
+    roles_dir: "{{ playbook_dir }}/../../ansible/roles"
+  tasks:
+    - name: Load role defaults
+      ansible.builtin.include_vars:
+        file: "{{ roles_dir }}/{{ item }}/defaults/main.yml"
+      loop: [elasticsearch, kibana, logstash, filebeat, metricbeat]
+
+    - name: Create the output directory
+      ansible.builtin.file:
+        path: "{{ test_host_out }}"
+        state: directory
+        mode: "0755"
+
+    - name: Build the list of templates for this host
+      ansible.builtin.set_fact:
+        test_templates: >-
+          {{ (
+               ['filebeat/templates/filebeat.yml.j2', 'metricbeat/templates/metricbeat.yml.j2']
+               + (filebeat_modules | map('regex_replace', '^(.*)$', 'filebeat/templates/modules.d/\1.yml.j2') | list)
+               + (metricbeat_modules | map('regex_replace', '^(.*)$', 'metricbeat/templates/modules.d/\1.yml.j2') | list)
+               + (['elasticsearch/templates/elasticsearch.yml.j2', 'elasticsearch/templates/heap.options.j2']
+                  if inventory_hostname in groups['elasticsearch'] else [])
+               + (['kibana/templates/kibana.yml.j2'] if inventory_hostname in groups['kibana'] else [])
+               + (['logstash/templates/logstash.yml.j2', 'logstash/templates/beats.conf.j2']
+                  if inventory_hostname in groups['logstash'] else [])
+             ) }}
+
+    - name: Render templates
+      ansible.builtin.template:
+        src: "{{ roles_dir }}/{{ item }}"
+        dest: "{{ test_host_out }}/{{ item | replace('/templates/', '__') | replace('/', '__') | regex_replace('\\.j2$', '') }}"
+        mode: "0644"
+      loop: "{{ test_templates }}"
+
+    - name: Read rendered files
+      ansible.builtin.slurp:
+        src: "{{ test_host_out }}/{{ item | replace('/templates/', '__') | replace('/', '__') | regex_replace('\\.j2$', '') }}"
+      loop: "{{ test_templates }}"
+      register: test_rendered
+
+    - name: Index rendered files by template
+      ansible.builtin.set_fact:
+        test_files: >-
+          {{ dict(test_rendered.results | map(attribute='item')
+                  | zip(test_rendered.results | map(attribute='content') | map('b64decode'))) }}
+
+    - name: YAML outputs parse
+      ansible.builtin.set_fact:
+        test_yaml: "{{ test_yaml | default({}) | combine({item.key: item.value | from_yaml}) }}"
+      loop: "{{ test_files | dict2items | selectattr('key', 'search', '\\.yml\\.j2$') | list }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: No secret value appears in any rendered file
+      ansible.builtin.assert:
+        that: >-
+          test_files.values() | select('search', item | regex_escape) | list | length == 0
+        fail_msg: A secret leaked into a rendered config file
+        quiet: true
+      loop:
+        - "{{ vault_elastic_password }}"
+        - "{{ vault_kibana_system_password }}"
+        - "{{ vault_logstash_system_password }}"
+        - "{{ vault_beats_system_password }}"
+        - "{{ vault_remote_monitoring_user_password }}"
+        - "{{ vault_logstash_writer_password }}"
+        - "{{ vault_metricbeat_writer_password }}"
+        - "{{ vault_logstash_keystore_password }}"
+        - "{{ vault_kibana_security_encryption_key }}"
+        - "{{ vault_kibana_saved_objects_encryption_key }}"
+        - "{{ vault_kibana_reporting_encryption_key }}"
+      loop_control:
+        label: "(secret)"
+      no_log: true
+
+    - name: Elasticsearch config is secure and correct
+      vars:
+        es: "{{ test_yaml['elasticsearch/templates/elasticsearch.yml.j2'] }}"
+      ansible.builtin.assert:
+        that:
+          - es['cluster.name'] == 'elk-test'
+          - es['node.name'] == inventory_hostname
+          - es['network.host'] == private_ip
+          - es['xpack.security.enabled'] is true
+          - es['xpack.security.enrollment.enabled'] is false
+          - es['xpack.security.http.ssl'].enabled is true
+          - es['xpack.security.transport.ssl'].enabled is true
+          - es['xpack.security.transport.ssl'].verification_mode == 'full'
+          - es['discovery.seed_hosts'] | length == groups['elasticsearch'] | length
+          - es['node.attr.zone'] == placement.availability_zone
+          - >-
+            (groups['elasticsearch'] | length == 1 and es['discovery.type'] == 'single-node'
+             and 'cluster.initial_master_nodes' not in es)
+            or
+            (groups['elasticsearch'] | length > 1 and 'discovery.type' not in es
+             and es['cluster.initial_master_nodes'] | sort == groups['elasticsearch'] | sort)
+      when: inventory_hostname in groups['elasticsearch']
+
+    - name: Heap is half of RAM
+      ansible.builtin.assert:
+        that:
+          - "'-Xms3910m' in test_files['elasticsearch/templates/heap.options.j2']"
+          - "'-Xmx3910m' in test_files['elasticsearch/templates/heap.options.j2']"
+      when: inventory_hostname in groups['elasticsearch']
+
+    - name: Kibana config is secure and correct
+      vars:
+        kb: "{{ test_yaml['kibana/templates/kibana.yml.j2'] }}"
+      ansible.builtin.assert:
+        that:
+          - kb['server.ssl.enabled'] is true
+          - kb['elasticsearch.username'] == 'kibana_system'
+          - "'elasticsearch.password' not in kb"
+          - kb['elasticsearch.ssl.verificationMode'] == 'full'
+          - kb['elasticsearch.hosts'] | length == groups['elasticsearch'] | length
+          - kb['elasticsearch.hosts'] | select('match', '^https://') | list | length == kb['elasticsearch.hosts'] | length
+      when: inventory_hostname in groups['kibana']
+
+    - name: Logstash config is secure and correct
+      vars:
+        pipeline: "{{ test_files['logstash/templates/beats.conf.j2'] }}"
+        ls: "{{ test_yaml['logstash/templates/logstash.yml.j2'] }}"
+      ansible.builtin.assert:
+        that:
+          - ls['api.http.host'] == '127.0.0.1'
+          - pipeline is search('ssl_enabled => true')
+          - pipeline is search('password => "\$\{ES_WRITER_PASSWORD\}"')
+          - pipeline is search('user => "logstash_writer"')
+          - pipeline is not search('http://')
+          - (pipeline | regex_findall('https://[0-9.]+:9200') | unique | length) == groups['elasticsearch'] | length
+      when: inventory_hostname in groups['logstash']
+
+    - name: Beats ship over TLS with least-privilege users
+      vars:
+        fb: "{{ test_yaml['filebeat/templates/filebeat.yml.j2'] }}"
+        mb: "{{ test_yaml['metricbeat/templates/metricbeat.yml.j2'] }}"
+      ansible.builtin.assert:
+        that:
+          - fb['output.logstash']['ssl.enabled'] is true
+          - fb['output.logstash']['ssl.verification_mode'] == 'full'
+          - fb['output.logstash'].hosts == groups['logstash'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':5044') | list
+          - mb['output.elasticsearch'].username == 'metricbeat_writer'
+          - mb['output.elasticsearch'].password == '${ES_WRITER_PASSWORD}'
+          - mb['output.elasticsearch']['ssl.verification_mode'] == 'full'
+          - mb['output.elasticsearch'].hosts | select('match', '^https://') | list | length == groups['elasticsearch'] | length
+
+    - name: Each host monitors only its own component
+      ansible.builtin.assert:
+        that:
+          - filebeat_modules[0] == 'system'
+          - ('elasticsearch' in filebeat_modules) == (inventory_hostname in groups['elasticsearch'])
+          - ('kibana' in filebeat_modules) == (inventory_hostname in groups['kibana'])
+          - ('logstash' in filebeat_modules) == (inventory_hostname in groups['logstash'])
+          - ('elasticsearch-xpack' in metricbeat_modules) == (inventory_hostname in groups['elasticsearch'])
+          - ('kibana-xpack' in metricbeat_modules) == (inventory_hostname in groups['kibana'])
+          - ('logstash-xpack' in metricbeat_modules) == (inventory_hostname in groups['logstash'])

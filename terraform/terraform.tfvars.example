@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
+
+region      = "us-east-1"
+name_prefix = "elk-demo"
+
+# Single-node mode for a cheap demo:
+# es_node_count    = 1
+# az_count         = 1
+# es_instance_type = "t3.large"
+
+extra_tags = {
+  Owner = "your-name"
+}

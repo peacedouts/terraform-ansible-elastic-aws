@@ -1,0 +1,17 @@
+---
+# Example only. Run `make vault` to generate vault.yml with random values and
+# encrypt it. Never commit a decrypted vault.yml.
+
+vault_elastic_password: "CHANGE_ME"
+vault_kibana_system_password: "CHANGE_ME"
+vault_logstash_system_password: "CHANGE_ME"
+vault_beats_system_password: "CHANGE_ME"
+vault_remote_monitoring_user_password: "CHANGE_ME"
+vault_logstash_writer_password: "CHANGE_ME"
+vault_metricbeat_writer_password: "CHANGE_ME"
+vault_logstash_keystore_password: "CHANGE_ME"
+
+# Kibana encryption keys, 32+ characters each.
+vault_kibana_security_encryption_key: "CHANGE_ME_TO_32_PLUS_CHARACTERS_000"
+vault_kibana_saved_objects_encryption_key: "CHANGE_ME_TO_32_PLUS_CHARACTERS_000"
+vault_kibana_reporting_encryption_key: "CHANGE_ME_TO_32_PLUS_CHARACTERS_000"

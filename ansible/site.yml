@@ -1,0 +1,95 @@
+---
+# Full deployment. Each play is tagged, so parts can be rerun on their own,
+# e.g. `ansible-playbook site.yml --tags kibana`.
+
+- name: Preflight checks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: Inventory has the expected groups
+      ansible.builtin.assert:
+        that:
+          - groups['elasticsearch'] | default([]) | length > 0
+          - groups['kibana'] | default([]) | length > 0
+          - groups['logstash'] | default([]) | length > 0
+        fail_msg: >-
+          The dynamic inventory found no stack hosts. Run `terraform apply` first and
+          check `ansible-inventory --graph`.
+
+    - name: Elasticsearch node count is odd
+      ansible.builtin.assert:
+        that: groups['elasticsearch'] | length is odd
+        fail_msg: Use an odd number of Elasticsearch nodes so master elections have a quorum.
+
+    - name: Secrets are defined
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.vars', item, default='') | length >= 12
+          - lookup('ansible.builtin.vars', item, default='') != 'CHANGE_ME'
+        fail_msg: "{{ item }} is missing or too short. Run `make vault` to create vault.yml."
+        quiet: true
+      loop:
+        - vault_elastic_password
+        - vault_kibana_system_password
+        - vault_logstash_system_password
+        - vault_beats_system_password
+        - vault_remote_monitoring_user_password
+        - vault_logstash_writer_password
+        - vault_metricbeat_writer_password
+        - vault_logstash_keystore_password
+        - vault_kibana_security_encryption_key
+        - vault_kibana_saved_objects_encryption_key
+        - vault_kibana_reporting_encryption_key
+
+- name: Generate TLS certificates locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [certs]
+  roles:
+    - elk_certs
+
+- name: Base OS configuration
+  hosts: elk
+  become: true
+  tags: [common]
+  roles:
+    - common
+
+- name: Elasticsearch cluster
+  hosts: elasticsearch
+  become: true
+  tags: [elasticsearch]
+  roles:
+    - elasticsearch
+
+- name: Elasticsearch users and roles
+  hosts: elasticsearch[0]
+  become: true
+  tags: [elasticsearch, security]
+  roles:
+    - es_security
+
+- name: Kibana
+  hosts: kibana
+  become: true
+  tags: [kibana]
+  roles:
+    - kibana
+
+- name: Logstash
+  hosts: logstash
+  become: true
+  tags: [logstash]
+  roles:
+    - logstash
+
+- name: Beats on every node
+  hosts: elk
+  become: true
+  tags: [beats]
+  roles:
+    - filebeat
+    - metricbeat

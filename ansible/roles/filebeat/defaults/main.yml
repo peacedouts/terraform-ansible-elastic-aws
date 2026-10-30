@@ -1,0 +1,11 @@
+---
+# Modules for this host: system everywhere, plus the module for the
+# component the host runs.
+filebeat_modules: >-
+  {{ ['system']
+     + (['elasticsearch'] if inventory_hostname in groups['elasticsearch'] else [])
+     + (['kibana'] if inventory_hostname in groups['kibana'] else [])
+     + (['logstash'] if inventory_hostname in groups['logstash'] else []) }}
+
+# Every module used anywhere in the stack, for loading ingest pipelines once.
+filebeat_all_modules: [system, elasticsearch, kibana, logstash]

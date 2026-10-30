@@ -1,0 +1,21 @@
+---
+# Fake values for offline tests only. These are not real credentials; they are
+# deliberately distinctive so the "no secrets in rendered config" check can
+# search for them.
+es_cluster_name: elk-test
+
+vault_elastic_password: "TEST-elastic-7f3a9c"
+vault_kibana_system_password: "TEST-kibana-system-2b8e1d"
+vault_logstash_system_password: "TEST-logstash-system-91c4ae"
+vault_beats_system_password: "TEST-beats-system-5d02f7"
+vault_remote_monitoring_user_password: "TEST-remote-mon-c61b38"
+vault_logstash_writer_password: "TEST-logstash-writer-0e9d52"
+vault_metricbeat_writer_password: "TEST-metricbeat-writer-a47f19"
+vault_logstash_keystore_password: "TEST-ls-keystore-3c88b0"
+vault_kibana_security_encryption_key: "TEST-kb-security-key-00000000000000000001"
+vault_kibana_saved_objects_encryption_key: "TEST-kb-saved-objects-key-000000000000002"
+vault_kibana_reporting_encryption_key: "TEST-kb-reporting-key-0000000000000000003"
+
+# Facts the templates use, normally gathered from the hosts.
+ansible_memtotal_mb: 7820
+ansible_processor_vcpus: 2

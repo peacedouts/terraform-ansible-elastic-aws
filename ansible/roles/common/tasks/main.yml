@@ -1,0 +1,53 @@
+---
+- name: Set the hostname to the inventory name
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - chrony
+      - curl
+      - gnupg
+      - jq
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Keep time in sync (TLS and cluster coordination depend on it)
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true
+
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download the Elastic signing key
+  ansible.builtin.get_url:
+    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    dest: /etc/apt/keyrings/elastic.asc
+    mode: "0644"
+
+- name: Add the Elastic apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/etc/apt/keyrings/elastic.asc]
+      https://artifacts.elastic.co/packages/{{ elastic_major_version }}.x/apt stable main
+    filename: elastic-{{ elastic_major_version }}.x
+    state: present
+    update_cache: true
+
+- name: Install the CA certificate for the stack
+  ansible.builtin.copy:
+    src: "{{ elk_certs_local_dir }}/ca/ca.crt"
+    dest: /usr/local/share/ca-certificates/elk-stack-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update CA trust

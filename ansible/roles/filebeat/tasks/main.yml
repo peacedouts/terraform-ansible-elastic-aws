@@ -1,0 +1,90 @@
+---
+- name: Install Filebeat
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: install_elastic_package
+  vars:
+    common_elastic_package: filebeat
+
+- name: Create the certs directory
+  ansible.builtin.file:
+    path: /etc/filebeat/certs
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the CA certificate
+  ansible.builtin.copy:
+    src: "{{ elk_certs_local_dir }}/ca/ca.crt"
+    dest: /etc/filebeat/certs/ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart filebeat
+
+- name: Write filebeat.yml
+  ansible.builtin.template:
+    src: filebeat.yml.j2
+    dest: /etc/filebeat/filebeat.yml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart filebeat
+
+- name: Enable modules for this host's role
+  ansible.builtin.template:
+    src: "modules.d/{{ item }}.yml.j2"
+    dest: "/etc/filebeat/modules.d/{{ item }}.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ filebeat_modules }}"
+  notify: Restart filebeat
+
+# Index templates, ingest pipelines and dashboards go straight to Elasticsearch
+# and Kibana, because the normal output is Logstash. This runs once, from the
+# Kibana host, which can reach both. The marker file keeps reruns quiet; delete
+# it after a version upgrade to load the new assets.
+- name: Load Filebeat index templates, ingest pipelines and dashboards
+  ansible.builtin.command:
+    argv:
+      - filebeat
+      - setup
+      - --index-management
+      - --pipelines
+      - --dashboards
+      - --modules
+      - "{{ filebeat_all_modules | join(',') }}"
+      - --force-enable-module-filesets
+      - -E
+      - output.logstash.enabled=false
+      - -E
+      - setup.template.enabled=true
+      - -E
+      - setup.ilm.enabled=true
+      - -E
+      - "output.elasticsearch.hosts={{ es_http_urls | to_json }}"
+      - -E
+      - output.elasticsearch.username=elastic
+      - -E
+      - output.elasticsearch.password=${ES_SETUP_PASSWORD}
+      - -E
+      - output.elasticsearch.ssl.certificate_authorities=["/etc/filebeat/certs/ca.crt"]
+      - -E
+      - setup.kibana.host=https://127.0.0.1:{{ kibana_port }}
+      - -E
+      - setup.kibana.ssl.certificate_authorities=["/etc/filebeat/certs/ca.crt"]
+    creates: /var/lib/filebeat/.elk-setup-done
+  environment:
+    ES_SETUP_PASSWORD: "{{ elastic_password }}"
+  run_once: true
+  delegate_to: "{{ groups['kibana'][0] }}"
+  no_log: true
+  notify: Record filebeat setup
+
+- name: Enable Filebeat
+  ansible.builtin.systemd_service:
+    name: filebeat
+    enabled: true
+    state: started

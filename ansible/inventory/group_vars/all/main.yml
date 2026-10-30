@@ -1,0 +1,33 @@
+---
+# --- Elastic packages -----------------------------------------------------------
+elastic_major_version: 8
+# Leave empty for the newest release in the repo, or pin, e.g. "8.19.2".
+# A pinned version is also held so `apt upgrade` can't move it.
+elastic_version: ""
+
+# --- Ports ----------------------------------------------------------------------
+es_http_port: 9200
+es_transport_port: 9300
+kibana_port: 5601
+logstash_beats_port: 5044
+logstash_api_port: 9600
+
+# --- TLS ------------------------------------------------------------------------
+# Generated on your machine by the elk_certs role and gitignored.
+elk_certs_local_dir: "{{ playbook_dir }}/.certs"
+elk_cert_days: 825
+
+# --- Derived topology -----------------------------------------------------------
+es_hosts: "{{ groups['elasticsearch'] | map('extract', hostvars, 'private_ip') | list }}"
+es_http_urls: "{{ es_hosts | map('regex_replace', '^(.*)$', 'https://\\1:' ~ es_http_port) | list }}"
+logstash_hosts: "{{ groups['logstash'] | default([]) | map('extract', hostvars, 'private_ip') | list }}"
+
+# --- Users ----------------------------------------------------------------------
+# Passwords live in vault.yml. See vault.yml.example.
+elastic_password: "{{ vault_elastic_password }}"
+kibana_system_password: "{{ vault_kibana_system_password }}"
+logstash_system_password: "{{ vault_logstash_system_password }}"
+beats_system_password: "{{ vault_beats_system_password }}"
+remote_monitoring_user_password: "{{ vault_remote_monitoring_user_password }}"
+logstash_writer_password: "{{ vault_logstash_writer_password }}"
+metricbeat_writer_password: "{{ vault_metricbeat_writer_password }}"

@@ -1,0 +1,20 @@
+---
+elasticsearch_data_path: /var/lib/elasticsearch
+elasticsearch_log_path: /var/log/elasticsearch
+elasticsearch_conf_dir: /etc/elasticsearch
+
+# Heap: half of RAM, capped below the compressed-oops limit. Override with a
+# value like "4g" if needed.
+elasticsearch_heap_size: >-
+  {{ [((ansible_memtotal_mb | int) / 2) | int, 30720] | min }}m
+
+# Node roles. Every node is master-eligible and holds data in the default
+# 3-node layout. Override per host for dedicated masters in larger clusters.
+elasticsearch_node_roles:
+  - master
+  - data
+  - ingest
+  - remote_cluster_client
+
+# Only used when the cluster forms for the first time.
+elasticsearch_initial_master_nodes: "{{ groups['elasticsearch'] }}"

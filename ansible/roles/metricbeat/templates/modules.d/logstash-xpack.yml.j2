@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# Stack Monitoring for the local Logstash node. The API is bound to loopback.
+- module: logstash
+  xpack.enabled: true
+  period: 10s
+  hosts: ["http://127.0.0.1:{{ logstash_api_port }}"]

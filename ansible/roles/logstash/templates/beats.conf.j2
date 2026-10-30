@@ -1,0 +1,40 @@
+# {{ ansible_managed }}
+
+input {
+  beats {
+    port => {{ logstash_beats_port }}
+    ssl_enabled => true
+    ssl_certificate => "{{ logstash_conf_dir }}/certs/node.crt"
+    ssl_key => "{{ logstash_conf_dir }}/certs/node.key"
+    ssl_client_authentication => "none"
+  }
+}
+
+# Filebeat modules ship with ingest pipelines; Logstash passes events through
+# so Elasticsearch can run the right pipeline for each module.
+output {
+  if [@metadata][pipeline] {
+    elasticsearch {
+      hosts => [{% for url in es_http_urls %}"{{ url }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+      ssl_enabled => true
+      ssl_certificate_authorities => ["{{ logstash_conf_dir }}/certs/ca.crt"]
+      user => "logstash_writer"
+      password => "${ES_WRITER_PASSWORD}"
+      manage_template => false
+      index => "%{[@metadata][beat]}-%{[@metadata][version]}"
+      action => "create"
+      pipeline => "%{[@metadata][pipeline]}"
+    }
+  } else {
+    elasticsearch {
+      hosts => [{% for url in es_http_urls %}"{{ url }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+      ssl_enabled => true
+      ssl_certificate_authorities => ["{{ logstash_conf_dir }}/certs/ca.crt"]
+      user => "logstash_writer"
+      password => "${ES_WRITER_PASSWORD}"
+      manage_template => false
+      index => "%{[@metadata][beat]}-%{[@metadata][version]}"
+      action => "create"
+    }
+  }
+}

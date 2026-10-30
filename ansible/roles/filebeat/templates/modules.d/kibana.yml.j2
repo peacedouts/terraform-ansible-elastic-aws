@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+- module: kibana
+  log:
+    enabled: true
+    var.paths: ["/var/log/kibana/kibana.log"]
+  audit:
+    enabled: false

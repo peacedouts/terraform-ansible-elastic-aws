@@ -1,0 +1,58 @@
+---
+# Runs once, against the first Elasticsearch node, through the local API.
+# Every call is idempotent on the Elasticsearch side, so changed_when reports
+# what Elasticsearch says it did.
+
+- name: Set built-in user passwords
+  ansible.builtin.uri:
+    url: "{{ es_security_api }}/_security/user/{{ item.key }}/_password"
+    method: POST
+    user: elastic
+    password: "{{ elastic_password }}"
+    force_basic_auth: true
+    ca_path: "{{ es_security_ca }}"
+    body_format: json
+    body:
+      password: "{{ item.value }}"
+    status_code: 200
+  loop: "{{ es_security_builtin_users | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+  changed_when: false
+
+- name: Create shipper roles
+  ansible.builtin.uri:
+    url: "{{ es_security_api }}/_security/role/{{ item.key }}"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    force_basic_auth: true
+    ca_path: "{{ es_security_ca }}"
+    body_format: json
+    body: "{{ item.value }}"
+    status_code: 200
+  loop: "{{ es_security_roles | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: es_security_role_result
+  changed_when: es_security_role_result.json.role.created | default(false)
+  no_log: true
+
+- name: Create shipper users
+  ansible.builtin.uri:
+    url: "{{ es_security_api }}/_security/user/{{ item.key }}"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    force_basic_auth: true
+    ca_path: "{{ es_security_ca }}"
+    body_format: json
+    body: "{{ item.value }}"
+    status_code: 200
+  loop: "{{ es_security_users | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: es_security_user_result
+  changed_when: es_security_user_result.json.created | default(false)
+  no_log: true

@@ -1,0 +1,100 @@
+---
+- name: Install Kibana
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: install_elastic_package
+  vars:
+    common_elastic_package: kibana
+
+- name: Create the certs directory
+  ansible.builtin.file:
+    path: "{{ kibana_conf_dir }}/certs"
+    state: directory
+    owner: root
+    group: kibana
+    mode: "0750"
+
+- name: Install node TLS material
+  ansible.builtin.copy:
+    src: "{{ elk_certs_local_dir }}/{{ item.src }}"
+    dest: "{{ kibana_conf_dir }}/certs/{{ item.dest }}"
+    owner: root
+    group: kibana
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: "ca/ca.crt", dest: "ca.crt", mode: "0644" }
+    - { src: "{{ inventory_hostname }}/{{ inventory_hostname }}.crt", dest: "node.crt", mode: "0644" }
+    - { src: "{{ inventory_hostname }}/{{ inventory_hostname }}.key", dest: "node.key", mode: "0640" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart kibana
+
+- name: Write kibana.yml
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: "{{ kibana_conf_dir }}/kibana.yml"
+    owner: root
+    group: kibana
+    mode: "0660"
+  notify: Restart kibana
+
+- name: Create the keystore
+  ansible.builtin.command:
+    cmd: /usr/share/kibana/bin/kibana-keystore create
+    creates: "{{ kibana_conf_dir }}/kibana.keystore"
+
+- name: Read the keystore entries
+  ansible.builtin.command: /usr/share/kibana/bin/kibana-keystore list
+  register: kibana_keystore
+  changed_when: false
+
+# Only missing entries are added. To rotate a secret, remove the entry with
+# `kibana-keystore remove <name>` and rerun.
+- name: Add secrets to the keystore
+  ansible.builtin.command:
+    cmd: /usr/share/kibana/bin/kibana-keystore add --stdin {{ item.key }}
+    stdin: "{{ item.value }}"
+  loop: "{{ kibana_keystore_entries | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: item.key not in kibana_keystore.stdout_lines
+  changed_when: true
+  no_log: true
+  notify: Restart kibana
+
+- name: Let the kibana user read the keystore
+  ansible.builtin.file:
+    path: "{{ kibana_conf_dir }}/kibana.keystore"
+    owner: root
+    group: kibana
+    mode: "0660"
+
+- name: Enable Kibana
+  ansible.builtin.systemd_service:
+    name: kibana
+    enabled: true
+    daemon_reload: true
+
+- name: Apply pending restarts
+  ansible.builtin.meta: flush_handlers
+
+- name: Start Kibana
+  ansible.builtin.systemd_service:
+    name: kibana
+    state: started
+
+- name: Wait for Kibana to report available
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ kibana_port }}/api/status"
+    user: elastic
+    password: "{{ elastic_password }}"
+    force_basic_auth: true
+    ca_path: "{{ kibana_conf_dir }}/certs/ca.crt"
+    status_code: 200
+  register: kibana_status
+  until: >-
+    kibana_status.status == 200 and
+    kibana_status.json.status.overall.level | default('') == 'available'
+  retries: 30
+  delay: 10
+  no_log: true

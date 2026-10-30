@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Stack Monitoring for the local Kibana instance.
+- module: kibana
+  xpack.enabled: true
+  period: 10s
+  hosts: ["https://127.0.0.1:{{ kibana_port }}"]
+  username: remote_monitoring_user
+  password: "${REMOTE_MONITORING_PASSWORD}"
+  ssl.certificate_authorities: ["/etc/metricbeat/certs/ca.crt"]
+  ssl.verification_mode: full

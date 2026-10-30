@@ -1,0 +1,136 @@
+---
+# Post-deploy smoke tests against the live stack: `make verify`.
+# Checks run on the nodes themselves (the cluster has no public endpoints).
+
+- name: Verify Elasticsearch
+  hosts: elasticsearch[0]
+  gather_facts: false
+  become: true
+  vars:
+    verify_api: "https://127.0.0.1:{{ es_http_port }}"
+    verify_ca: /etc/elasticsearch/certs/ca.crt
+    verify_expected_status: "{{ 'green' if groups['elasticsearch'] | length > 1 else 'yellow' }}"
+  tasks:
+    - name: Cluster is healthy with every node joined
+      ansible.builtin.uri:
+        url: "{{ verify_api }}/_cluster/health?wait_for_status={{ verify_expected_status }}&timeout=60s"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        ca_path: "{{ verify_ca }}"
+      register: verify_health
+      no_log: true
+
+    - name: Assert cluster health
+      ansible.builtin.assert:
+        that:
+          - verify_health.json.status in ['green', 'yellow']
+          - verify_health.json.number_of_nodes == groups['elasticsearch'] | length
+        fail_msg: >-
+          status={{ verify_health.json.status }},
+          nodes={{ verify_health.json.number_of_nodes }}/{{ groups['elasticsearch'] | length }}
+
+    - name: Plain HTTP is refused
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ es_http_port }}/"
+        timeout: 5
+      register: verify_plain_http
+      failed_when: verify_plain_http.status == 200
+
+    - name: Anonymous requests are rejected
+      ansible.builtin.uri:
+        url: "{{ verify_api }}/"
+        ca_path: "{{ verify_ca }}"
+        status_code: 401
+
+    - name: Shipper users can authenticate
+      ansible.builtin.uri:
+        url: "{{ verify_api }}/_security/_authenticate"
+        user: "{{ item.user }}"
+        password: "{{ item.password }}"
+        force_basic_auth: true
+        ca_path: "{{ verify_ca }}"
+      loop:
+        - { user: logstash_writer, password: "{{ logstash_writer_password }}" }
+        - { user: metricbeat_writer, password: "{{ metricbeat_writer_password }}" }
+        - { user: kibana_system, password: "{{ kibana_system_password }}" }
+        - { user: remote_monitoring_user, password: "{{ remote_monitoring_user_password }}" }
+      loop_control:
+        label: "{{ item.user }}"
+      no_log: true
+
+    - name: The shipper user can't administer the cluster
+      ansible.builtin.uri:
+        url: "{{ verify_api }}/_cluster/settings"
+        method: PUT
+        user: logstash_writer
+        password: "{{ logstash_writer_password }}"
+        force_basic_auth: true
+        ca_path: "{{ verify_ca }}"
+        body_format: json
+        body: { persistent: { "cluster.routing.allocation.enable": "all" } }
+        status_code: 403
+      no_log: true
+
+    # Data takes a minute or two to arrive after a fresh deploy.
+    - name: Logs and metrics are arriving
+      ansible.builtin.uri:
+        url: "{{ verify_api }}/{{ item }}/_count"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        ca_path: "{{ verify_ca }}"
+        status_code: [200, 404]
+      register: verify_counts
+      until: verify_counts.status == 200 and verify_counts.json.count > 0
+      retries: 18
+      delay: 10
+      loop:
+        - filebeat-*
+        - metricbeat-*
+        - .monitoring-es-*
+        - .monitoring-kibana-*
+        - .monitoring-logstash-*
+      no_log: true
+
+- name: Verify Kibana
+  hosts: kibana
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Kibana reports available
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ kibana_port }}/api/status"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        ca_path: /etc/kibana/certs/ca.crt
+      register: verify_kibana
+      failed_when: verify_kibana.json.status.overall.level != 'available'
+      no_log: true
+
+    - name: Kibana requires a login
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ kibana_port }}/api/status"
+        ca_path: /etc/kibana/certs/ca.crt
+        status_code: 401
+
+- name: Verify Logstash
+  hosts: logstash
+  gather_facts: false
+  become: true
+  tasks:
+    - name: The Beats pipeline is receiving events
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ logstash_api_port }}/_node/stats/pipelines/main"
+      register: verify_pipeline
+      until: verify_pipeline.json.pipelines.main.events.out | default(0) > 0
+      retries: 18
+      delay: 10
+
+    - name: The monitoring API is only on loopback
+      ansible.builtin.uri:
+        url: "http://{{ private_ip }}:{{ logstash_api_port }}/"
+        timeout: 5
+      register: verify_logstash_api
+      failed_when: verify_logstash_api.status == 200

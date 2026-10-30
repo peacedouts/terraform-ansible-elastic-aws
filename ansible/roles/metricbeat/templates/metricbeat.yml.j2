@@ -1,0 +1,34 @@
+# {{ ansible_managed }}
+# Passwords come from the Metricbeat keystore.
+
+name: {{ inventory_hostname }}
+
+metricbeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+processors:
+  - add_host_metadata: ~
+  - add_cloud_metadata: ~
+
+output.elasticsearch:
+  hosts:
+{% for url in es_http_urls %}
+    - "{{ url }}"
+{% endfor %}
+  username: metricbeat_writer
+  password: "${ES_WRITER_PASSWORD}"
+  ssl.certificate_authorities: ["/etc/metricbeat/certs/ca.crt"]
+  ssl.verification_mode: full
+
+# Templates and ILM are loaded by `metricbeat setup` during deployment.
+setup.template.enabled: false
+setup.ilm.enabled: false
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/metricbeat
+  name: metricbeat
+  keepfiles: 7
+  permissions: 0640

@@ -1,0 +1,11 @@
+---
+kibana_conf_dir: /etc/kibana
+# Users reach Kibana through SSM port forwarding on their own machine.
+kibana_public_base_url: "https://localhost:{{ kibana_port }}"
+
+# Secrets that go into the Kibana keystore instead of kibana.yml.
+kibana_keystore_entries:
+  elasticsearch.password: "{{ kibana_system_password }}"
+  xpack.security.encryptionKey: "{{ vault_kibana_security_encryption_key }}"
+  xpack.encryptedSavedObjects.encryptionKey: "{{ vault_kibana_saved_objects_encryption_key }}"
+  xpack.reporting.encryptionKey: "{{ vault_kibana_reporting_encryption_key }}"

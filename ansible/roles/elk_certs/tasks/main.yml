@@ -1,0 +1,83 @@
+---
+# Builds a private CA and one certificate per stack host, on the machine
+# running Ansible. Nothing here is committed: .certs/ is gitignored.
+# Existing keys and certs are reused, so reruns are idempotent.
+
+- name: Create the local certs directory
+  ansible.builtin.file:
+    path: "{{ elk_certs_local_dir }}/{{ item }}"
+    state: directory
+    mode: "0700"
+  loop: "{{ ['ca'] + groups['elk'] }}"
+
+- name: Generate the CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ elk_certs_local_dir }}/ca/ca.key"
+    type: RSA
+    size: 4096
+    mode: "0600"
+
+- name: Create the CA signing request
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ elk_certs_local_dir }}/ca/ca.key"
+    common_name: "{{ es_cluster_name }} Elastic Stack CA"
+    use_common_name_for_san: false
+    basic_constraints:
+      - "CA:TRUE"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+  register: elk_certs_ca_csr
+  changed_when: false
+
+- name: Self-sign the CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ elk_certs_local_dir }}/ca/ca.crt"
+    csr_content: "{{ elk_certs_ca_csr.csr }}"
+    privatekey_path: "{{ elk_certs_local_dir }}/ca/ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ elk_cert_days * 2 }}d"
+    mode: "0644"
+
+# PKCS#8 keys work for Elasticsearch, Kibana and the Logstash Beats input alike.
+- name: Generate a private key per host
+  community.crypto.openssl_privatekey:
+    path: "{{ elk_certs_local_dir }}/{{ item }}/{{ item }}.key"
+    type: RSA
+    size: 2048
+    format: pkcs8
+    mode: "0600"
+  loop: "{{ groups['elk'] }}"
+
+- name: Create a signing request per host
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ elk_certs_local_dir }}/{{ item }}/{{ item }}.key"
+    common_name: "{{ item }}"
+    subject_alt_name:
+      - "DNS:{{ item }}"
+      - "DNS:{{ hostvars[item].private_dns }}"
+      - "IP:{{ hostvars[item].private_ip }}"
+      # Lets health checks on the node and SSM port forwarding validate the cert.
+      - "DNS:localhost"
+      - "IP:127.0.0.1"
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+  loop: "{{ groups['elk'] }}"
+  register: elk_certs_host_csrs
+  changed_when: false
+
+- name: Sign each host certificate with the CA
+  community.crypto.x509_certificate:
+    path: "{{ elk_certs_local_dir }}/{{ item.item }}/{{ item.item }}.crt"
+    csr_content: "{{ item.csr }}"
+    provider: ownca
+    ownca_path: "{{ elk_certs_local_dir }}/ca/ca.crt"
+    ownca_privatekey_path: "{{ elk_certs_local_dir }}/ca/ca.key"
+    ownca_not_after: "+{{ elk_cert_days }}d"
+    mode: "0644"
+  loop: "{{ elk_certs_host_csrs.results }}"
+  loop_control:
+    label: "{{ item.item }}"

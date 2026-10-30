@@ -1,0 +1,4 @@
+---
+logstash_conf_dir: /etc/logstash
+logstash_heap_size: 1g
+logstash_pipeline_workers: "{{ ansible_processor_vcpus | default(2) }}"

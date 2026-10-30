@@ -1,0 +1,33 @@
+---
+es_security_api: "https://127.0.0.1:{{ es_http_port }}"
+es_security_ca: /etc/elasticsearch/certs/ca.crt
+
+# Built-in users whose passwords are set from the vault.
+es_security_builtin_users:
+  kibana_system: "{{ kibana_system_password }}"
+  logstash_system: "{{ logstash_system_password }}"
+  beats_system: "{{ beats_system_password }}"
+  remote_monitoring_user: "{{ remote_monitoring_user_password }}"
+
+# Least-privilege roles for the shippers.
+es_security_roles:
+  logstash_writer:
+    cluster: [monitor, read_ilm, read_pipeline]
+    indices:
+      - names: ["filebeat-*", "logs-*", "logstash-*"]
+        privileges: [create_doc, create_index, auto_configure, view_index_metadata]
+  metricbeat_writer:
+    cluster: [monitor, read_ilm, read_pipeline]
+    indices:
+      - names: ["metricbeat-*", ".monitoring-*"]
+        privileges: [create_doc, create_index, auto_configure, view_index_metadata]
+
+es_security_users:
+  logstash_writer:
+    password: "{{ logstash_writer_password }}"
+    roles: [logstash_writer]
+    full_name: Logstash pipeline output
+  metricbeat_writer:
+    password: "{{ metricbeat_writer_password }}"
+    roles: [metricbeat_writer, remote_monitoring_agent]
+    full_name: Metricbeat output

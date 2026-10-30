@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+- module: elasticsearch
+  server:
+    enabled: true
+  gc:
+    enabled: true
+  audit:
+    enabled: false
+  slowlog:
+    enabled: true
+  deprecation:
+    enabled: true

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - name: terraform test (mocked providers, no AWS access)
+        run: terraform test
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: tflint --format compact
+      - name: checkov
+        run: |
+          pip install --quiet checkov
+          checkov --directory . --quiet --compact --framework terraform
+
+  ansible:
+    name: Ansible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: pip install --quiet ansible-core ansible-lint yamllint cryptography
+      - name: Install collections
+        working-directory: ansible
+        run: ansible-galaxy collection install -r requirements.yml
+      - run: yamllint .
+      - name: ansible-lint
+        working-directory: ansible
+        run: ansible-lint
+      - name: Syntax check
+        working-directory: ansible
+        run: |
+          for pb in site.yml verify.yml; do
+            ansible-playbook -i ../tests/ansible/inventory/three-node.yml --syntax-check "$pb"
+          done
+      - name: Render and certificate tests
+        working-directory: tests/ansible
+        env:
+          ANSIBLE_ROLES_PATH: ../../ansible/roles
+        run: |
+          ansible-playbook -i inventory/three-node.yml render_test.yml
+          ansible-playbook -i inventory/single-node.yml render_test.yml
+
+  shell:
+    name: Shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/*.sh

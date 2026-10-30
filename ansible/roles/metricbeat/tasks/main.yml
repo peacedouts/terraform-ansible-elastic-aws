@@ -1,0 +1,120 @@
+---
+- name: Install Metricbeat
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: install_elastic_package
+  vars:
+    common_elastic_package: metricbeat
+
+- name: Create the certs directory
+  ansible.builtin.file:
+    path: /etc/metricbeat/certs
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the CA certificate
+  ansible.builtin.copy:
+    src: "{{ elk_certs_local_dir }}/ca/ca.crt"
+    dest: /etc/metricbeat/certs/ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart metricbeat
+
+- name: Create the keystore
+  ansible.builtin.command:
+    cmd: metricbeat keystore create
+    creates: /var/lib/metricbeat/metricbeat.keystore
+
+- name: Read the keystore entries
+  ansible.builtin.command: metricbeat keystore list
+  register: metricbeat_keystore
+  changed_when: false
+
+# Only missing entries are added. To rotate, run
+# `metricbeat keystore remove <KEY>` on the host and rerun.
+- name: Add secrets to the keystore
+  ansible.builtin.command:
+    cmd: metricbeat keystore add {{ item.key }} --stdin
+    stdin: "{{ item.value }}"
+  loop: "{{ metricbeat_keystore_entries | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: item.key not in metricbeat_keystore.stdout_lines
+  changed_when: true
+  no_log: true
+  notify: Restart metricbeat
+
+- name: Write metricbeat.yml
+  ansible.builtin.template:
+    src: metricbeat.yml.j2
+    dest: /etc/metricbeat/metricbeat.yml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart metricbeat
+
+- name: Find modules enabled by the package
+  ansible.builtin.find:
+    paths: /etc/metricbeat/modules.d
+    patterns: "*.yml"
+  register: metricbeat_enabled_modules
+
+# The package turns on the system module by default. Only modules this role
+# templates should run, so remove anything else.
+- name: Disable modules this role doesn't manage
+  ansible.builtin.command:
+    cmd: metricbeat modules disable {{ item.path | basename | regex_replace('\.yml$', '') }}
+  loop: "{{ metricbeat_enabled_modules.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: (item.path | basename | regex_replace('\.yml$', '')) not in metricbeat_modules
+  changed_when: true
+  notify: Restart metricbeat
+
+- name: Enable modules for this host's role
+  ansible.builtin.template:
+    src: "modules.d/{{ item }}.yml.j2"
+    dest: "/etc/metricbeat/modules.d/{{ item }}.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ metricbeat_modules }}"
+  notify: Restart metricbeat
+
+# Same pattern as Filebeat: run once from the Kibana host. Delete the marker
+# after a version upgrade to reload templates and dashboards.
+- name: Load Metricbeat index templates and dashboards
+  ansible.builtin.command:
+    argv:
+      - metricbeat
+      - setup
+      - --index-management
+      - --dashboards
+      - -E
+      - setup.template.enabled=true
+      - -E
+      - setup.ilm.enabled=true
+      - -E
+      - output.elasticsearch.username=elastic
+      - -E
+      - output.elasticsearch.password=${ES_SETUP_PASSWORD}
+      - -E
+      - setup.kibana.host=https://127.0.0.1:{{ kibana_port }}
+      - -E
+      - setup.kibana.ssl.certificate_authorities=["/etc/metricbeat/certs/ca.crt"]
+    creates: /var/lib/metricbeat/.elk-setup-done
+  environment:
+    ES_SETUP_PASSWORD: "{{ elastic_password }}"
+  run_once: true
+  delegate_to: "{{ groups['kibana'][0] }}"
+  no_log: true
+  notify: Record metricbeat setup
+
+- name: Enable Metricbeat
+  ansible.builtin.systemd_service:
+    name: metricbeat
+    enabled: true
+    state: started

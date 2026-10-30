@@ -1,0 +1,11 @@
+---
+# System metrics everywhere, plus Stack Monitoring for the component on each host.
+metricbeat_modules: >-
+  {{ ['system']
+     + (['elasticsearch-xpack'] if inventory_hostname in groups['elasticsearch'] else [])
+     + (['kibana-xpack'] if inventory_hostname in groups['kibana'] else [])
+     + (['logstash-xpack'] if inventory_hostname in groups['logstash'] else []) }}
+
+metricbeat_keystore_entries:
+  ES_WRITER_PASSWORD: "{{ metricbeat_writer_password }}"
+  REMOTE_MONITORING_PASSWORD: "{{ remote_monitoring_user_password }}"
