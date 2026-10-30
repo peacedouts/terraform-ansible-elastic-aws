@@ -1,10 +1,9 @@
 # Elastic Stack on AWS with Terraform and Ansible
 
-A production-shaped Elastic Stack (Elasticsearch, Kibana, Logstash, Filebeat,
-Metricbeat) on AWS. Terraform builds the network and instances; Ansible
-configures the stack over **AWS Systems Manager**. No instance has a public IP,
-no security group opens SSH, and every connection between components is TLS
-with full certificate verification.
+Terraform builds the network and instances. Ansible configures Elasticsearch,
+Kibana, Logstash, Filebeat and Metricbeat over AWS Systems Manager. Nothing
+has a public IP, there's no SSH, and every connection between components uses
+TLS with full certificate verification.
 
 ```mermaid
 flowchart LR
@@ -12,15 +11,13 @@ flowchart LR
 
     subgraph aws["AWS account"]
         ssm["SSM Session Manager"]
-        s3[("S3 transfer bucket<br/>objects expire in 1 day")]
+        s3[("S3 transfer bucket")]
 
-        subgraph vpc["VPC 10.40.0.0/16"]
-            subgraph pub["Public subnets"]
-                nat["NAT gateway"]
-            end
+        subgraph vpc["VPC"]
+            nat["NAT gateway"]
 
             subgraph priv["Private subnets, one per AZ"]
-                subgraph es["Elasticsearch cluster"]
+                subgraph es["Elasticsearch"]
                     es1["es-01"]
                     es2["es-02"]
                     es3["es-03"]
@@ -31,157 +28,138 @@ flowchart LR
         end
     end
 
-    you -- "Ansible (aws_ssm)<br/>port forwarding" --> ssm
+    you -- "Ansible, port forwarding" --> ssm
     you -. "file transfer" .-> s3
     ssm --> priv
     s3 -.-> priv
 
-    es1 <-- "9300 TLS" --> es2
-    es2 <-- "9300 TLS" --> es3
-    es1 <-- "9300 TLS" --> es3
-
-    kb -- "9200 HTTPS" --> es
-    ls -- "9200 HTTPS<br/>logstash_writer" --> es
-    priv -- "Filebeat 5044 TLS" --> ls
-    priv -- "Metricbeat 9200 HTTPS<br/>metricbeat_writer" --> es
-
+    kb -- "HTTPS" --> es
+    ls -- "HTTPS" --> es
+    priv -- "Filebeat (TLS)" --> ls
+    priv -- "Metricbeat (HTTPS)" --> es
     priv -- "packages" --> nat
 ```
 
-Every node runs Filebeat (logs → Logstash → Elasticsearch) and Metricbeat
-(system metrics plus Stack Monitoring for the component on that node), so the
-cluster monitors itself from the moment it comes up.
+Every node runs Filebeat and Metricbeat, so the cluster ships its own logs and
+Stack Monitoring data from the start.
 
-## Design choices
+## How it's built
 
-| Decision | Why |
-| --- | --- |
-| **SSM instead of SSH** | No keys to manage or leak, no port 22, no bastion. Access is IAM-controlled and logged in CloudTrail. Kibana is reached by SSM port forwarding. |
-| **Dynamic inventory** | Terraform writes an `aws_ec2` inventory config that finds instances by tag and groups them by role. Nothing hand-maintained, no IPs in the repo. |
-| **Certificates generated locally** | A small CA and per-host certs are built on the controller with `community.crypto` and pushed to nodes. Keys never leave your machine except to the node that owns them. |
-| **Secrets in keystores, not config files** | Passwords and encryption keys go into the Elasticsearch, Kibana, Logstash and Metricbeat keystores. The test suite fails if any secret appears in a rendered config file. |
-| **Least-privilege shipper users** | Logstash and Metricbeat write with dedicated users that can only create documents in their own indices, not the `elastic` superuser. |
-| **Security groups reference security groups** | No ingress rule uses a CIDR. Only the component that needs a port can reach it. |
-| **AZ-aware shard allocation** | Elasticsearch nodes are spread across three AZs and tagged with their zone, so primaries and replicas land in different AZs. |
+- **SSM, not SSH.** No keys, no port 22, no bastion. Access goes through IAM
+  and shows up in CloudTrail. Kibana is reached with SSM port forwarding.
+- **No hand-written inventory.** Terraform generates an `aws_ec2` inventory
+  that finds instances by tag and groups them by role.
+- **Certificates built locally.** A small CA and per-host certs are generated
+  on your machine. Each key goes only to the node that owns it.
+- **Secrets live in keystores.** Passwords and encryption keys go into each
+  service's keystore, never into config files. A test fails if one leaks.
+- **Least-privilege writers.** Logstash and Metricbeat write with dedicated
+  users that can only create documents in their own indices.
+- **Tight security groups.** Rules reference other security groups, never CIDR
+  ranges, so only the component that needs a port can reach it.
+- **Spread across AZs.** Elasticsearch nodes sit in three AZs with zone-aware
+  shard allocation, so a primary and its replica never share an AZ.
 
 ## Prerequisites
 
-- Terraform ≥ 1.7 and an AWS account with credentials configured
-- Python 3.10+ with `ansible-core` ≥ 2.16, `boto3` and `botocore`
+- Terraform 1.7 or newer, and AWS credentials
+- Python 3.10+ with `ansible-core` 2.16+, `boto3` and `botocore`
 - The [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) for the AWS CLI
 
 ```bash
 pip install ansible-core boto3 botocore
-make deps        # Ansible collections
+make deps
 ```
 
 ## Deploy
 
 ```bash
-# 1. Infrastructure
-cp terraform/terraform.tfvars.example terraform/terraform.tfvars   # adjust
-make init plan apply
-
-# 2. Secrets: random passwords, encrypted with a vault password you choose
-make vault
-
-# 3. Configure the stack (about 10–15 minutes on a fresh cluster)
-make inventory   # should list elasticsearch, kibana and logstash groups
-make deploy
-
-# 4. Check it end to end
-make verify
+cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+make init plan apply   # infrastructure
+make vault             # random secrets, encrypted with a password you pick
+make inventory         # should show elasticsearch, kibana and logstash
+make deploy            # about 10 to 15 minutes on a fresh cluster
+make verify            # end-to-end smoke test
 ```
 
-Open Kibana:
+To open Kibana, run `make kibana` and browse to <https://localhost:5601>. Sign
+in as `elastic`; `ansible-vault view ansible/inventory/group_vars/all/vault.yml`
+shows the password. The browser will warn about the certificate unless you
+trust `ansible/.certs/ca/ca.crt`.
 
-```bash
-make kibana      # starts an SSM port-forwarding session
-```
+Rerun one part with tags, e.g. `make deploy ANSIBLE_ARGS="--tags kibana"`.
 
-Then browse to <https://localhost:5601> and sign in as `elastic`
-(`ansible-vault view ansible/inventory/group_vars/all/vault.yml` shows the
-password). The certificate is signed by the stack's own CA, at
-`ansible/.certs/ca/ca.crt`; trust it or accept the browser warning.
-
-Rerun parts of the deployment with tags:
-
-```bash
-make deploy ANSIBLE_ARGS="--tags kibana"
-```
-
-### Cost
-
-The default layout (3 × `m6i.large`, `t3.medium`, `t3.large`, one NAT gateway)
-is roughly **$11–13 per day** in `us-east-1`. For a cheap demo, set
-`es_node_count = 1`, `az_count = 1` and `es_instance_type = "t3.large"`.
-Run `make destroy` when you're done.
+**Cost:** the default layout runs about $11 to $13 a day in `us-east-1`. For a
+cheap demo, set `es_node_count = 1`, `az_count = 1` and
+`es_instance_type = "t3.large"`. Run `make destroy` when you're done.
 
 ## Tests
 
-| Layer | What runs | Needs AWS? |
-| --- | --- | --- |
-| `terraform test` | Plan-level assertions with mocked providers: no public IPs, IMDSv2 only, encrypted volumes, no CIDR or SSH ingress, locked-down default SG and S3 bucket, input validation | No |
-| `tests/ansible/render_test.yml` | Generates real certificates and checks the chain, SANs, key types and permissions, and that a rerun doesn't regenerate them. Renders every template for a 3-node and a 1-node topology and checks TLS settings, users, topology, and that **no secret appears in any config file** | No |
-| `ansible-lint` (production profile), `yamllint`, `tflint`, `checkov`, `shellcheck` | Static analysis | No |
-| `gitleaks` | Secret scanning in CI and as a pre-commit hook | No |
-| `ansible/verify.yml` | Smoke test against the live stack: cluster green with all nodes, plain HTTP refused, anonymous requests rejected, shipper users can authenticate but not administer the cluster, logs and monitoring data arriving, Kibana requires login, Logstash API not exposed | Yes |
+`make test` runs everything that doesn't need AWS:
 
-```bash
-make test    # offline tests
-make lint
-make scan    # gitleaks + checkov
-```
+- **`terraform test`** with mocked providers checks there are no public IPs,
+  IMDSv2 is required, volumes are encrypted, no ingress uses a CIDR or port 22,
+  the default security group and S3 bucket are locked down, and bad inputs are
+  rejected.
+- **`tests/ansible/render_test.yml`** generates real certificates and checks
+  the chain, SANs, key format and permissions, and that a rerun keeps them. It
+  then renders every template for a 3-node and a 1-node cluster and checks TLS,
+  users and topology, and that no secret shows up in any config file.
 
-Install the pre-commit hooks to catch secrets before they're committed,
-including a check that refuses an unencrypted vault file:
+`make lint` runs `ansible-lint` (production profile), `yamllint`, `tflint` and
+`terraform validate`. `make scan` runs `gitleaks` and `checkov`. CI runs all
+of it on every push.
+
+Once the stack is up, `make verify` checks the live cluster: all nodes joined
+and green, plain HTTP and anonymous requests refused, shipper users able to
+write but not administer, logs and monitoring data arriving, Kibana requiring
+a login, and the Logstash API staying on localhost.
+
+The pre-commit hooks catch secrets before they're committed and refuse an
+unencrypted vault file:
 
 ```bash
 pip install pre-commit && pre-commit install
 ```
 
-## Repository layout
+## Layout
 
 ```
-terraform/          VPC, security groups, IAM, S3, EC2; writes the Ansible inventory
+terraform/          VPC, security groups, IAM, S3, EC2; writes the inventory
   tests/            terraform test with mocked providers
 ansible/
   site.yml          full deployment
-  verify.yml        post-deploy smoke tests
-  inventory/        group_vars and (generated) aws_ec2 inventory
+  verify.yml        smoke tests against the live stack
   roles/
     elk_certs       CA and host certificates, built locally
     common          hostname, time sync, Elastic apt repo, CA trust
-    elasticsearch   cluster config, TLS, keystore, health check
-    es_security     built-in user passwords, least-privilege roles and users
-    kibana          TLS, keystore secrets, health check
+    elasticsearch   cluster config, TLS, keystore
+    es_security     built-in passwords, roles and writer users
+    kibana          TLS and keystore secrets
     logstash        Beats input over TLS, protected keystore
-    filebeat        modules per host role, index templates and pipelines
-    metricbeat      system metrics and Stack Monitoring per host role
+    filebeat        per-host modules, templates and ingest pipelines
+    metricbeat      system metrics and Stack Monitoring
 tests/ansible/      offline render and certificate tests
 scripts/            vault generator
 ```
 
-## Security notes
+## Good to know
 
-- **What's never committed:** the vault file, generated certificates and keys,
-  Terraform state and tfvars, and the generated inventory are all in
-  `.gitignore`. gitleaks runs in CI and as a pre-commit hook.
-- **Rotating a secret:** keystore entries are only added when missing, so a
-  changed vault value doesn't silently restart services. To rotate, remove the
-  entry from the relevant keystore on the host and rerun the role.
-- **Kibana access** is only through SSM port forwarding; there is no load
-  balancer. Put an ALB with an ACM certificate and OIDC/SAML in front of it for
-  real users.
-- **Restarts are not rolling.** A config change restarts all Elasticsearch
-  nodes together, which is fine for a demo but causes a brief outage. A rolling
-  restart playbook is the natural next step for production use.
+- The vault file, certificates, Terraform state, tfvars and the generated
+  inventory are all gitignored.
+- Keystore entries are only added when missing, so changing a vault value
+  doesn't quietly restart services. To rotate a secret, remove the entry from
+  the keystore on the host and rerun the role.
+- Kibana has no load balancer. For real users, put an ALB with an ACM
+  certificate and OIDC or SAML in front of it.
+- Config changes restart all Elasticsearch nodes at once. That's fine for a
+  demo; production wants a rolling restart.
 
-## Roadmap
+## Next up
 
-- Rolling restart and rolling upgrade playbooks
-- Snapshot repository on S3 with an SLM policy
-- Separate data volumes and dedicated master nodes for larger clusters
+- Rolling restart and upgrade playbooks
+- S3 snapshot repository with an SLM policy
+- Dedicated master nodes and separate data volumes for bigger clusters
 - ALB with OIDC in front of Kibana
 
 ## License
