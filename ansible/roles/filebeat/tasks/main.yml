@@ -46,42 +46,80 @@
 # and Kibana, because the normal output is Logstash. This runs once, from the
 # Kibana host, which can reach both. The marker file keeps reruns quiet; delete
 # it after a version upgrade to load the new assets.
+#
+# The elastic password is put in the Beat's keystore for the duration of setup
+# and referenced as ${ES_SETUP_PASSWORD}. Passing it through `environment:`
+# would put it on the sudo command line, which lands in auth.log and gets
+# shipped by Filebeat's system module.
 - name: Load Filebeat index templates, ingest pipelines and dashboards
-  ansible.builtin.command:
-    argv:
-      - filebeat
-      - setup
-      - --index-management
-      - --pipelines
-      - --dashboards
-      - --modules
-      - "{{ filebeat_all_modules | join(',') }}"
-      - --force-enable-module-filesets
-      - -E
-      - output.logstash.enabled=false
-      - -E
-      - setup.template.enabled=true
-      - -E
-      - setup.ilm.enabled=true
-      - -E
-      - "output.elasticsearch.hosts={{ es_http_urls | to_json }}"
-      - -E
-      - output.elasticsearch.username=elastic
-      - -E
-      - output.elasticsearch.password=${ES_SETUP_PASSWORD}
-      - -E
-      - output.elasticsearch.ssl.certificate_authorities=["/etc/filebeat/certs/ca.crt"]
-      - -E
-      - setup.kibana.host=https://127.0.0.1:{{ kibana_port }}
-      - -E
-      - setup.kibana.ssl.certificate_authorities=["/etc/filebeat/certs/ca.crt"]
-    creates: /var/lib/filebeat/.elk-setup-done
-  environment:
-    ES_SETUP_PASSWORD: "{{ elastic_password }}"
   run_once: true
   delegate_to: "{{ groups['kibana'][0] }}"
-  no_log: true
-  notify: Record filebeat setup
+  block:
+    - name: Check whether filebeat setup already ran
+      ansible.builtin.stat:
+        path: /var/lib/filebeat/.elk-setup-done
+      register: filebeat_setup_marker
+
+    - name: Run filebeat setup
+      when: not filebeat_setup_marker.stat.exists
+      block:
+        - name: Create the Filebeat keystore
+          ansible.builtin.command:
+            cmd: filebeat keystore create
+            creates: /var/lib/filebeat/filebeat.keystore
+
+        - name: Put the setup password in the filebeat keystore
+          ansible.builtin.command:
+            cmd: filebeat keystore add ES_SETUP_PASSWORD --stdin --force
+            stdin: "{{ elastic_password }}"
+          changed_when: true
+          no_log: true
+
+        - name: Load Filebeat index templates, ingest pipelines and dashboards
+          ansible.builtin.command:
+            argv:
+              - filebeat
+              - setup
+              - --index-management
+              - --pipelines
+              - --dashboards
+              - --modules
+              - "{{ filebeat_all_modules | join(',') }}"
+              - --force-enable-module-filesets
+              - -E
+              - output.logstash.enabled=false
+              - -E
+              - setup.template.enabled=true
+              - -E
+              - setup.ilm.enabled=true
+              - -E
+              - "output.elasticsearch.hosts={{ es_http_urls | to_json }}"
+              - -E
+              - output.elasticsearch.username=elastic
+              - -E
+              - output.elasticsearch.password=${ES_SETUP_PASSWORD}
+              - -E
+              - output.elasticsearch.ssl.certificate_authorities=["/etc/filebeat/certs/ca.crt"]
+              - -E
+              - setup.kibana.host=https://127.0.0.1:{{ kibana_port }}
+              - -E
+              - setup.kibana.ssl.certificate_authorities=["/etc/filebeat/certs/ca.crt"]
+          changed_when: true
+
+        - name: Record that filebeat setup ran
+          ansible.builtin.file:
+            path: /var/lib/filebeat/.elk-setup-done
+            state: touch
+            mode: "0644"
+            modification_time: preserve
+            access_time: preserve
+      always:
+        - name: Remove the setup password from the filebeat keystore
+          ansible.builtin.command:
+            cmd: filebeat keystore remove ES_SETUP_PASSWORD
+          register: filebeat_keystore_cleanup
+          changed_when: filebeat_keystore_cleanup.rc == 0
+          failed_when: false
 
 - name: Enable Filebeat
   ansible.builtin.systemd_service:

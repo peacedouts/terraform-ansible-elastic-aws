@@ -3,12 +3,3 @@
   ansible.builtin.systemd_service:
     name: filebeat
     state: restarted
-
-# Marker so later runs skip `filebeat setup`. Delete it after an upgrade.
-- name: Record filebeat setup
-  ansible.builtin.file:
-    path: /var/lib/filebeat/.elk-setup-done
-    state: touch
-    mode: "0644"
-  run_once: true
-  delegate_to: "{{ groups['kibana'][0] }}"

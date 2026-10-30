@@ -71,15 +71,18 @@
   changed_when: false
 
 # The package's security auto-configuration adds passwords for PKCS#12
-# keystores. This role uses PEM files instead, so those entries must go or
-# Elasticsearch refuses to start.
-- name: Remove auto-configured keystore passwords
+# keystores and a random hash for the elastic user. This role uses PEM files
+# and bootstrap.password instead, so those entries must go: the PKCS#12
+# passwords stop Elasticsearch from starting, and the hash would win over
+# bootstrap.password and leave elastic with a password nobody knows.
+- name: Remove auto-configured keystore entries
   ansible.builtin.command: >-
     /usr/share/elasticsearch/bin/elasticsearch-keystore remove {{ item }}
   loop:
     - xpack.security.http.ssl.keystore.secure_password
     - xpack.security.transport.ssl.keystore.secure_password
     - xpack.security.transport.ssl.truststore.secure_password
+    - autoconfiguration.password_hash
   when: item in elasticsearch_keystore.stdout_lines
   changed_when: true
   notify: Restart elasticsearch

@@ -14,6 +14,24 @@
     test_out: "{{ playbook_dir }}/.out/{{ ansible_inventory_sources[0] | basename | splitext | first }}"
     elk_certs_local_dir: "{{ test_out }}/certs"
   tasks:
+    # `environment:` values end up on the remote sudo command line, which is
+    # logged to auth.log and shipped by Filebeat. Secrets must go through
+    # stdin or a root-only file instead, so no task may use it.
+    - name: Find tasks that set environment variables on remote hosts
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../../ansible"
+        patterns: "*.yml"
+        recurse: true
+        contains: '^\s+environment:'
+        read_whole_file: false
+      register: test_env_tasks
+
+    - name: Check that no task passes values through environment
+      ansible.builtin.assert:
+        that: test_env_tasks.files | rejectattr('path', 'search', '/(collections|\\.ansible)/') | list | length == 0
+        fail_msg: "Remove `environment:` from {{ test_env_tasks.files | map(attribute='path') | list }}"
+        quiet: true
+
     - name: Start from a clean output directory
       ansible.builtin.file:
         path: "{{ test_out }}"

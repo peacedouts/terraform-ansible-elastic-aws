@@ -3,12 +3,3 @@
   ansible.builtin.systemd_service:
     name: metricbeat
     state: restarted
-
-# Marker so later runs skip `metricbeat setup`. Delete it after an upgrade.
-- name: Record metricbeat setup
-  ansible.builtin.file:
-    path: /var/lib/metricbeat/.elk-setup-done
-    state: touch
-    mode: "0644"
-  run_once: true
-  delegate_to: "{{ groups['kibana'][0] }}"

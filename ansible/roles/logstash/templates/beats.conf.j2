@@ -21,6 +21,7 @@ output {
       user => "logstash_writer"
       password => "${ES_WRITER_PASSWORD}"
       manage_template => false
+      ilm_enabled => false
       index => "%{[@metadata][beat]}-%{[@metadata][version]}"
       action => "create"
       pipeline => "%{[@metadata][pipeline]}"
@@ -33,6 +34,7 @@ output {
       user => "logstash_writer"
       password => "${ES_WRITER_PASSWORD}"
       manage_template => false
+      ilm_enabled => false
       index => "%{[@metadata][beat]}-%{[@metadata][version]}"
       action => "create"
     }

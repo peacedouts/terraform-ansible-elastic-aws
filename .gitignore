@@ -1,8 +1,10 @@
 # --- Secrets and generated key material --------------------------------------
 ansible/.certs/
 ansible/inventory/group_vars/all/vault.yml
+ansible/inventory/group_vars/all/vault.yaml
 .vault_pass
-.vault_pass.txt
+.vault_pass*
+.vault-pass*
 *.pem
 *.key
 *.p12
@@ -20,6 +22,8 @@ ansible/inventory/group_vars/all/terraform.yml
 *.tfstate
 *.tfstate.*
 *.tfplan
+tfplan
+*.tfvars.json
 crash.log
 crash.*.log
 terraform.tfvars
@@ -33,6 +37,8 @@ override.tf.json
 # --- Ansible -------------------------------------------------------------------
 *.retry
 ansible/collections/
+ansible/.ansible/
+.ansible/
 tests/ansible/.out/
 
 # --- Tooling / OS --------------------------------------------------------------

@@ -8,6 +8,9 @@
     name: "{{ common_elastic_package }}{{ ('=' ~ elastic_version) if elastic_version | length > 0 else '' }}"
     state: present
     allow_downgrade: false
+  # The elasticsearch package prints an auto-generated elastic password during
+  # install. It is replaced later, but keep it out of the output anyway.
+  no_log: "{{ common_elastic_package == 'elasticsearch' }}"
 
 - name: Hold the package at the pinned version ({{ common_elastic_package }})
   ansible.builtin.dpkg_selections:

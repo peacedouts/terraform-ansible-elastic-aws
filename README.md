@@ -50,11 +50,15 @@ Stack Monitoring data from the start.
 - **No hand-written inventory.** Terraform generates an `aws_ec2` inventory
   that finds instances by tag and groups them by role.
 - **Certificates built locally.** A small CA and per-host certs are generated
-  on your machine. Each key goes only to the node that owns it.
+  on your machine. The CA key never leaves it, and each node gets only its
+  own key. Nodes have no S3 permissions, so they can't see each other's files
+  in the transfer bucket.
 - **Secrets live in keystores.** Passwords and encryption keys go into each
-  service's keystore, never into config files. A test fails if one leaks.
+  service's keystore, never into config files or command lines. Tests fail
+  if one shows up in a rendered file or a task passes one through
+  `environment:`.
 - **Least-privilege writers.** Logstash and Metricbeat write with dedicated
-  users that can only create documents in their own indices.
+  users that can only append documents to their own data streams.
 - **Tight security groups.** Rules reference other security groups, never CIDR
   ranges, so only the component that needs a port can reach it.
 - **Spread across AZs.** Elasticsearch nodes sit in three AZs with zone-aware
@@ -132,7 +136,7 @@ ansible/
   verify.yml        smoke tests against the live stack
   roles/
     elk_certs       CA and host certificates, built locally
-    common          hostname, time sync, Elastic apt repo, CA trust
+    common          hostname, time sync, Elastic apt repo
     elasticsearch   cluster config, TLS, keystore
     es_security     built-in passwords, roles and writer users
     kibana          TLS and keystore secrets

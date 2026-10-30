@@ -20,25 +20,9 @@ resource "aws_iam_role_policy_attachment" "ssm_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# The aws_ssm connection plugin moves files through S3. Nodes only get access
-# to the dedicated transfer bucket.
-data "aws_iam_policy_document" "ssm_transfer" {
-  statement {
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.ssm_transfer.arn}/*"]
-  }
-
-  statement {
-    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
-    resources = [aws_s3_bucket.ssm_transfer.arn]
-  }
-}
-
-resource "aws_iam_role_policy" "ssm_transfer" {
-  name   = "ssm-transfer-bucket"
-  role   = aws_iam_role.node.id
-  policy = data.aws_iam_policy_document.ssm_transfer.json
-}
+# No S3 permissions here on purpose. The aws_ssm connection plugin hands nodes
+# presigned URLs for the transfer bucket, so they never need their own access.
+# Granting it would let one node read or overwrite files meant for another.
 
 resource "aws_iam_instance_profile" "node" {
   name = "${var.name_prefix}-node"

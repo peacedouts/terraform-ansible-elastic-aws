@@ -86,32 +86,65 @@
 
 # Same pattern as Filebeat: run once from the Kibana host. Delete the marker
 # after a version upgrade to reload templates and dashboards.
+#
+# The elastic password is put in the Beat's keystore for the duration of setup
+# and referenced as ${ES_SETUP_PASSWORD}. Passing it through `environment:`
+# would put it on the sudo command line, which lands in auth.log and gets
+# shipped by Filebeat's system module.
 - name: Load Metricbeat index templates and dashboards
-  ansible.builtin.command:
-    argv:
-      - metricbeat
-      - setup
-      - --index-management
-      - --dashboards
-      - -E
-      - setup.template.enabled=true
-      - -E
-      - setup.ilm.enabled=true
-      - -E
-      - output.elasticsearch.username=elastic
-      - -E
-      - output.elasticsearch.password=${ES_SETUP_PASSWORD}
-      - -E
-      - setup.kibana.host=https://127.0.0.1:{{ kibana_port }}
-      - -E
-      - setup.kibana.ssl.certificate_authorities=["/etc/metricbeat/certs/ca.crt"]
-    creates: /var/lib/metricbeat/.elk-setup-done
-  environment:
-    ES_SETUP_PASSWORD: "{{ elastic_password }}"
   run_once: true
   delegate_to: "{{ groups['kibana'][0] }}"
-  no_log: true
-  notify: Record metricbeat setup
+  block:
+    - name: Check whether metricbeat setup already ran
+      ansible.builtin.stat:
+        path: /var/lib/metricbeat/.elk-setup-done
+      register: metricbeat_setup_marker
+
+    - name: Run metricbeat setup
+      when: not metricbeat_setup_marker.stat.exists
+      block:
+        - name: Put the setup password in the metricbeat keystore
+          ansible.builtin.command:
+            cmd: metricbeat keystore add ES_SETUP_PASSWORD --stdin --force
+            stdin: "{{ elastic_password }}"
+          changed_when: true
+          no_log: true
+
+        - name: Load Metricbeat index templates and dashboards
+          ansible.builtin.command:
+            argv:
+              - metricbeat
+              - setup
+              - --index-management
+              - --dashboards
+              - -E
+              - setup.template.enabled=true
+              - -E
+              - setup.ilm.enabled=true
+              - -E
+              - output.elasticsearch.username=elastic
+              - -E
+              - output.elasticsearch.password=${ES_SETUP_PASSWORD}
+              - -E
+              - setup.kibana.host=https://127.0.0.1:{{ kibana_port }}
+              - -E
+              - setup.kibana.ssl.certificate_authorities=["/etc/metricbeat/certs/ca.crt"]
+          changed_when: true
+
+        - name: Record that metricbeat setup ran
+          ansible.builtin.file:
+            path: /var/lib/metricbeat/.elk-setup-done
+            state: touch
+            mode: "0644"
+            modification_time: preserve
+            access_time: preserve
+      always:
+        - name: Remove the setup password from the metricbeat keystore
+          ansible.builtin.command:
+            cmd: metricbeat keystore remove ES_SETUP_PASSWORD
+          register: metricbeat_keystore_cleanup
+          changed_when: metricbeat_keystore_cleanup.rc == 0
+          failed_when: false
 
 - name: Enable Metricbeat
   ansible.builtin.systemd_service:

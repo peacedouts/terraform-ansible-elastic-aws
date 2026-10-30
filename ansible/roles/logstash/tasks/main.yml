@@ -29,13 +29,16 @@
     label: "{{ item.dest }}"
   notify: Restart logstash
 
-# The systemd unit reads this file, so the keystore password never appears in
-# a config file Logstash itself loads.
-- name: Provide the keystore password to the service
+# The systemd unit reads this root-only file. Keystore commands below source it
+# too, so the password is never put on a command line (where sudo would log it
+# to auth.log and Filebeat would ship it). LS_JAVA_OPTS is appended after
+# jvm.options, so these heap flags win.
+- name: Provide the keystore password and heap size to the service
   ansible.builtin.copy:
     dest: /etc/default/logstash
     content: |
       LOGSTASH_KEYSTORE_PASS={{ vault_logstash_keystore_password }}
+      LS_JAVA_OPTS="-Xms{{ logstash_heap_size }} -Xmx{{ logstash_heap_size }}"
     owner: root
     group: root
     mode: "0600"
@@ -43,27 +46,31 @@
   notify: Restart logstash
 
 - name: Create the password-protected keystore
-  ansible.builtin.command:
-    cmd: /usr/share/logstash/bin/logstash-keystore --path.settings {{ logstash_conf_dir }} create
+  ansible.builtin.shell:
+    cmd: >-
+      set -a && . /etc/default/logstash && set +a &&
+      exec /usr/share/logstash/bin/logstash-keystore
+      --path.settings {{ logstash_conf_dir }} create
     creates: "{{ logstash_conf_dir }}/logstash.keystore"
-  environment:
-    LOGSTASH_KEYSTORE_PASS: "{{ vault_logstash_keystore_password }}"
   no_log: true
 
 - name: Read the keystore entries
-  ansible.builtin.command: /usr/share/logstash/bin/logstash-keystore --path.settings {{ logstash_conf_dir }} list
-  environment:
-    LOGSTASH_KEYSTORE_PASS: "{{ vault_logstash_keystore_password }}"
+  ansible.builtin.shell:
+    cmd: >-
+      set -a && . /etc/default/logstash && set +a &&
+      exec /usr/share/logstash/bin/logstash-keystore
+      --path.settings {{ logstash_conf_dir }} list
   register: logstash_keystore
   changed_when: false
   no_log: true
 
 - name: Store the Elasticsearch output password
-  ansible.builtin.command:
-    cmd: /usr/share/logstash/bin/logstash-keystore --path.settings {{ logstash_conf_dir }} add ES_WRITER_PASSWORD
+  ansible.builtin.shell:
+    cmd: >-
+      set -a && . /etc/default/logstash && set +a &&
+      exec /usr/share/logstash/bin/logstash-keystore
+      --path.settings {{ logstash_conf_dir }} add ES_WRITER_PASSWORD
     stdin: "{{ logstash_writer_password }}"
-  environment:
-    LOGSTASH_KEYSTORE_PASS: "{{ vault_logstash_keystore_password }}"
   when: "'es_writer_password' not in (logstash_keystore.stdout | lower)"
   changed_when: true
   no_log: true
@@ -83,17 +90,6 @@
     owner: root
     group: logstash
     mode: "0640"
-  notify: Restart logstash
-
-- name: Set the JVM heap size
-  ansible.builtin.copy:
-    dest: "{{ logstash_conf_dir }}/jvm.options.d/heap.options"
-    content: |
-      -Xms{{ logstash_heap_size }}
-      -Xmx{{ logstash_heap_size }}
-    owner: root
-    group: logstash
-    mode: "0644"
   notify: Restart logstash
 
 - name: Write the Beats pipeline
