@@ -39,7 +39,14 @@ jobs:
       - run: terraform init -backend=false -input=false
       - run: terraform validate
       - name: terraform test (mocked providers, no AWS access)
-        run: terraform test
+        run: |
+          set -o pipefail
+          if ! terraform test -no-color 2>&1 | tee tftest.log; then
+            # Surface the failures as an annotation so they show on the run summary.
+            msg=$(grep -E -A12 'Error:|fail' tftest.log | head -c 60000 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=terraform test failed::${msg}"
+            exit 1
+          fi
       - uses: terraform-linters/setup-tflint@v4
       - run: tflint --init
         env:
