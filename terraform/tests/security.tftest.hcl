@@ -9,6 +9,31 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:AssumeRole\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}"
     }
   }
+
+  # ARNs are validated too, so mocked ones must be well formed.
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/mock"
+    }
+  }
+
+  mock_resource "aws_iam_instance_profile" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:instance-profile/mock"
+    }
+  }
+
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = {
+      arn = "arn:aws:logs:us-east-1:123456789012:log-group:mock"
+    }
+  }
+
+  mock_resource "aws_s3_bucket" {
+    defaults = {
+      arn = "arn:aws:s3:::mock-bucket"
+    }
+  }
 }
 
 override_data {
