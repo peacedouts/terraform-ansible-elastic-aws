@@ -1,5 +1,7 @@
 # Elastic Stack on AWS with Terraform and Ansible
 
+By [Zachary Adams](https://github.com/peacedouts)
+
 Terraform builds the network and instances. Ansible configures Elasticsearch,
 Kibana, Logstash, Filebeat and Metricbeat over AWS Systems Manager. Nothing
 has a public IP, there's no SSH, and every connection between components uses
