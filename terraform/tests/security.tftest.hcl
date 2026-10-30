@@ -1,7 +1,15 @@
 # Offline tests: providers are mocked, so no AWS credentials or resources are
 # needed. Run with `terraform test` (Terraform >= 1.7).
 
-mock_provider "aws" {}
+mock_provider "aws" {
+  # The provider still validates policy JSON when mocked, so give every
+  # policy document a minimal valid one.
+  mock_data "aws_iam_policy_document" {
+    defaults = {
+      json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:AssumeRole\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}"
+    }
+  }
+}
 
 override_data {
   target = data.aws_availability_zones.available
